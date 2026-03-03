@@ -75,103 +75,31 @@ get_user_home() {
   fi
 }
 
-# ── JSON Query ─────────────────────────────────────────────────────────────────
-# Uses jq if available, falls back to python3
-_has_jq=false
-_has_python3=false
-
-if command -v jq &>/dev/null; then
-  _has_jq=true
-elif command -v python3 &>/dev/null; then
-  _has_python3=true
+# ── JSON Query (requires jq) ───────────────────────────────────────────────────
+if ! command -v jq &>/dev/null; then
+  echo "ERROR: jq is required. Install: apt install jq / brew install jq" >&2
+  exit 1
 fi
 
 json_query() {
   # Usage: json_query '.field.subfield' < input.json
-  #    or: echo '{}' | json_query '.field'
   local filter="$1"
-  if $_has_jq; then
-    jq -r "$filter"
-  elif $_has_python3; then
-    # Pass filter via argv to avoid injection
-    python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-filter_path = sys.argv[1]
-parts = filter_path.strip('.').split('.')
-result = data
-for p in parts:
-    if p and isinstance(result, dict):
-        result = result.get(p)
-    elif p and isinstance(result, list):
-        result = result[int(p)] if p.isdigit() else None
-    if result is None:
-        break
-if result is None:
-    print('null')
-elif isinstance(result, (dict, list)):
-    print(json.dumps(result))
-else:
-    print(result)
-" "$filter"
-  else
-    echo "ERROR: Neither jq nor python3 found. Install one of them." >&2
-    return 1
-  fi
+  jq -r "$filter"
 }
 
 json_build() {
-  # Build JSON from arguments using jq or python3
+  # Build JSON from arguments using jq
   # Usage: json_build --arg key value --arg key2 value2 'template'
-  if $_has_jq; then
-    jq "$@"
-  elif $_has_python3; then
-    # Fallback: only supports simple --arg key val patterns
-    python3 -c "
-import sys, json
-args = sys.argv[1:]
-data = {}
-i = 0
-while i < len(args) - 1:
-    if args[i] == '--arg' and i + 2 < len(args):
-        data[args[i+1]] = args[i+2]
-        i += 3
-    else:
-        i += 1
-print(json.dumps(data, indent=2))
-" "$@"
-  else
-    echo "ERROR: Neither jq nor python3 found." >&2
-    return 1
-  fi
+  jq "$@"
 }
 
 json_set() {
   # Set a key in a JSON file
   # Usage: json_set file.json '.key' 'value'
   local file="$1" path="$2" value="$3"
-  if $_has_jq; then
-    local tmp
-    tmp=$(brain_mktemp)
-    jq --argjson val "$value" "${path} = \$val" "$file" > "$tmp" && mv "$tmp" "$file"
-  elif $_has_python3; then
-    # Pass file, path, value via argv to avoid injection
-    python3 -c "
-import json, sys
-file_path = sys.argv[1]
-key_path = sys.argv[2]
-value_str = sys.argv[3]
-with open(file_path) as f:
-    data = json.load(f)
-keys = key_path.strip('.').split('.')
-obj = data
-for k in keys[:-1]:
-    obj = obj.setdefault(k, {})
-obj[keys[-1]] = json.loads(value_str)
-with open(file_path, 'w') as f:
-    json.dump(data, f, indent=2)
-" "$file" "$path" "$value"
-  fi
+  local tmp
+  tmp=$(brain_mktemp)
+  jq --argjson val "$value" "${path} = \$val" "$file" > "$tmp" && mv "$tmp" "$file"
 }
 
 # ── Hashing ────────────────────────────────────────────────────────────────────
@@ -181,7 +109,7 @@ compute_hash() {
     sha256sum | cut -d' ' -f1
   elif command -v shasum &>/dev/null; then
     shasum -a 256 | cut -d' ' -f1
-  elif $_has_python3; then
+  elif command -v python3 &>/dev/null; then
     python3 -c "import sys,hashlib; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())"
   else
     echo "ERROR: No hash utility found." >&2
@@ -204,7 +132,7 @@ generate_machine_id() {
   # Generate an 8-char hex ID
   if [ -f /dev/urandom ]; then
     head -c 4 /dev/urandom | od -An -tx1 | tr -d ' \n'
-  elif $_has_python3; then
+  elif command -v python3 &>/dev/null; then
     python3 -c "import secrets; print(secrets.token_hex(4))"
   else
     date +%s | compute_hash | head -c 8
@@ -334,41 +262,15 @@ append_merge_log() {
     echo '{"entries":[]}' > "$log_file"
   fi
 
-  if $_has_jq; then
-    local tmp
-    tmp=$(brain_mktemp)
-    jq --arg ts "$timestamp" \
-       --arg mid "$machine_id" \
-       --arg mn "$machine_name" \
-       --arg act "$action" \
-       --arg sum "$summary" \
-       '.entries = [{"timestamp":$ts,"machine_id":$mid,"machine_name":$mn,"action":$act,"summary":$sum}] + .entries | .entries = .entries[:200]' \
-       "$log_file" > "$tmp" && mv "$tmp" "$log_file"
-  elif $_has_python3; then
-    # Pass all data via argv to avoid injection
-    python3 -c "
-import json, sys
-log_file = sys.argv[1]
-timestamp = sys.argv[2]
-machine_id = sys.argv[3]
-machine_name = sys.argv[4]
-action = sys.argv[5]
-summary = sys.argv[6]
-with open(log_file) as f:
-    data = json.load(f)
-entry = {
-    'timestamp': timestamp,
-    'machine_id': machine_id,
-    'machine_name': machine_name,
-    'action': action,
-    'summary': summary
-}
-data['entries'] = [entry] + data.get('entries', [])
-data['entries'] = data['entries'][:200]
-with open(log_file, 'w') as f:
-    json.dump(data, f, indent=2)
-" "$log_file" "$timestamp" "$machine_id" "$machine_name" "$action" "$summary"
-  fi
+  local tmp
+  tmp=$(brain_mktemp)
+  jq --arg ts "$timestamp" \
+     --arg mid "$machine_id" \
+     --arg mn "$machine_name" \
+     --arg act "$action" \
+     --arg sum "$summary" \
+     '.entries = [{"timestamp":$ts,"machine_id":$mid,"machine_name":$mn,"action":$act,"summary":$sum}] + .entries | .entries = .entries[:200]' \
+     "$log_file" > "$tmp" && mv "$tmp" "$log_file"
 }
 
 # ── Timestamp ──────────────────────────────────────────────────────────────────
@@ -384,8 +286,8 @@ check_dependencies() {
     missing+=("git")
   fi
 
-  if ! $_has_jq && ! $_has_python3; then
-    missing+=("jq or python3")
+  if ! command -v jq &>/dev/null; then
+    missing+=("jq")
   fi
 
   # Check age if encryption is enabled
@@ -403,7 +305,7 @@ check_dependencies() {
 
 # ── Age Encryption ────────────────────────────────────────────────────────────
 encryption_enabled() {
-  if [ -f "$BRAIN_CONFIG" ] && $_has_jq; then
+  if [ -f "$BRAIN_CONFIG" ]; then
     local enabled
     enabled=$(jq -r '.encryption.enabled // false' "$BRAIN_CONFIG")
     [ "$enabled" = "true" ]
@@ -413,7 +315,7 @@ encryption_enabled() {
 }
 
 get_age_identity() {
-  if [ -f "$BRAIN_CONFIG" ] && $_has_jq; then
+  if [ -f "$BRAIN_CONFIG" ]; then
     jq -r '.encryption.identity // "~/.claude/brain-age-key.txt"' "$BRAIN_CONFIG" | sed "s|~|$HOME|"
   else
     echo "${HOME}/.claude/brain-age-key.txt"
@@ -421,7 +323,7 @@ get_age_identity() {
 }
 
 get_age_recipients() {
-  if [ -f "$BRAIN_CONFIG" ] && $_has_jq; then
+  if [ -f "$BRAIN_CONFIG" ]; then
     jq -r '.encryption.recipients // "~/.claude/brain-repo/meta/recipients.txt"' "$BRAIN_CONFIG" | sed "s|~|$HOME|"
   else
     echo "${BRAIN_REPO}/meta/recipients.txt"

@@ -265,7 +265,6 @@ test_export_no_secrets() {
 test_export_import_roundtrip() {
   section "Export → Import round-trip"
 
-  if ! $HAS_JQ; then skip "Requires jq"; return; fi
 
   local snapshot="$TEST_DIR/snapshot.json"
   if [ ! -f "$snapshot" ]; then
@@ -324,7 +323,6 @@ test_secret_scanning() {
 
 test_structured_merge() {
   section "Structured merge"
-  if ! $HAS_JQ; then skip "Requires jq"; return; fi
 
   # Create two snapshots with different settings
   local snap_a="$TEST_DIR/snap-a.json"
@@ -427,21 +425,16 @@ test_register_machine() {
     fi
   done
 
-  # Check last_evolved field (added in v0.2, jq path only)
-  if $HAS_JQ; then
-    if jqf ".last_evolved" "$BRAIN_CONFIG" >/dev/null 2>&1; then
-      pass "Config has last_evolved field"
-    else
-      fail "Config missing last_evolved field"
-    fi
+  # Check last_evolved field (added in v0.2)
+  if jqf ".last_evolved" "$BRAIN_CONFIG" >/dev/null 2>&1; then
+    pass "Config has last_evolved field"
   else
-    skip "last_evolved check requires jq"
+    fail "Config missing last_evolved field"
   fi
 }
 
 test_shared_namespace() {
   section "Shared namespace"
-  if ! $HAS_JQ; then skip "Requires jq"; return; fi
 
   # Create shared skill in brain-repo
   echo "# Shared Test Skill" > "$BRAIN_REPO/shared/skills/team-tool.md"
@@ -474,7 +467,6 @@ EOF
 
 test_auto_evolve_trigger() {
   section "Auto-evolve scheduling"
-  if ! $HAS_JQ; then skip "Requires jq"; return; fi
 
   # Ensure brain-config exists
   if [ ! -f "$BRAIN_CONFIG" ]; then
@@ -610,8 +602,11 @@ test_encryption_roundtrip() {
 echo -e "${CYAN}claude-brain integration tests${NC}"
 echo "================================"
 
-HAS_JQ=false
-command -v jq &>/dev/null && HAS_JQ=true
+# jq is required
+if ! command -v jq &>/dev/null; then
+  echo -e "${RED}ERROR: jq is required to run tests. Install: apt install jq / brew install jq${NC}"
+  exit 1
+fi
 
 setup_sandbox
 

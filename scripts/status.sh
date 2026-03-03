@@ -61,7 +61,7 @@ if is_initialized; then
   fi
 
   # Network info
-  if [ -f "${BRAIN_REPO}/meta/machines.json" ] && $_has_jq; then
+  if [ -f "${BRAIN_REPO}/meta/machines.json" ]; then
     machine_count=$(jq '.machines | length' "${BRAIN_REPO}/meta/machines.json")
     echo "Network: ${machine_count} machine(s)"
     jq -r '.machines | to_entries[] | "  - \(.value.name) (\(.key)) last sync: \(.value.last_sync // "never")"' \
@@ -137,7 +137,7 @@ echo ""
 
 # Conflicts
 conflicts_file="${HOME}/.claude/brain-conflicts.json"
-if [ -f "$conflicts_file" ] && $_has_jq; then
+if [ -f "$conflicts_file" ]; then
   unresolved=$(jq '[.conflicts[] | select(.resolved != true)] | length' "$conflicts_file")
   if [ "$unresolved" -gt 0 ]; then
     echo "=== Conflicts ==="

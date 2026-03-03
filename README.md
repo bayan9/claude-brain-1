@@ -213,7 +213,7 @@ You can always trigger manually with `/brain-evolve`.
 ## Dependencies
 
 - `git` (for sync transport)
-- `jq` or `python3` (for JSON processing)
+- `jq` (for JSON processing — install: `apt install jq` / `brew install jq` / `pacman -S jq`)
 - `claude` CLI (for semantic merge — already installed if you have Claude Code)
 - `age` (optional, for encryption)
 

@@ -17,10 +17,6 @@ if ! command -v claude &>/dev/null; then
   exit 1
 fi
 
-if ! $_has_jq; then
-  log_error "jq required for brain evolution."
-  exit 1
-fi
 
 load_config
 
@@ -167,13 +163,10 @@ if $AUTO_MODE; then
   
   # Extract high-confidence promotions (not implemented yet - would need promotion logic)
   # For now, just update last_evolved timestamp
-  if $_has_jq; then
     local_tmp=$(brain_mktemp)
     jq --arg ts "$(now_iso)" '.last_evolved = $ts' "$BRAIN_CONFIG" > "$local_tmp"
     mv "$local_tmp" "$BRAIN_CONFIG"
   fi
   
   log_info "Auto-evolve complete. High-confidence changes applied."
-else
   log_info "Evolution analysis saved to meta/last-evolve.json"
-fi

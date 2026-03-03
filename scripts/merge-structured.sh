@@ -14,11 +14,6 @@ if [ ! -f "$BASE" ] || [ ! -f "$OTHER" ]; then
   exit 1
 fi
 
-if ! $_has_jq; then
-  log_warn "jq not available. Structured merge requires jq. Skipping."
-  cp "$BASE" "$OUTPUT"
-  exit 0
-fi
 
 # Create a comprehensive merge using jq
 jq -s '

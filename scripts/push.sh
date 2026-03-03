@@ -51,18 +51,13 @@ brain_git commit -m "Sync: $(get_machine_name) (${machine_id}) at $(now_iso)" 2>
 # Push with retry (handles concurrent pushes)
 if brain_push_with_retry 3 2; then
   # Update local config
-  if $_has_jq; then
     local_tmp=$(brain_mktemp)
     jq --arg ts "$(now_iso)" '.last_push = $ts | .dirty = false' "$BRAIN_CONFIG" > "$local_tmp"
     mv "$local_tmp" "$BRAIN_CONFIG"
   fi
   log_info "Brain snapshot pushed."
-else
   # Mark dirty for retry on next session start
-  if $_has_jq; then
     local_tmp=$(brain_mktemp)
     jq '.dirty = true' "$BRAIN_CONFIG" > "$local_tmp"
     mv "$local_tmp" "$BRAIN_CONFIG"
-  fi
   log_warn "Push failed. Marked dirty for retry."
-fi

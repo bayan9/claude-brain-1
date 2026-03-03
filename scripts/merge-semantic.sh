@@ -15,7 +15,7 @@ CONFIDENCE_THRESHOLD=0.8
 MAX_BUDGET="0.50"
 
 # Load defaults
-if [ -f "$DEFAULTS_FILE" ] && $_has_jq; then
+if [ -f "$DEFAULTS_FILE" ]; then
   CONFIDENCE_THRESHOLD=$(jq -r '.merge_confidence_threshold // 0.8' "$DEFAULTS_FILE")
   MAX_BUDGET=$(jq -r '.max_budget_usd // 0.50' "$DEFAULTS_FILE")
 fi
@@ -26,10 +26,6 @@ if ! command -v claude &>/dev/null; then
 fi
 
 # ── Extract content to merge ───────────────────────────────────────────────────
-if ! $_has_jq; then
-  log_warn "jq not available. Skipping semantic merge."
-  exit 0
-fi
 
 if [ ${#SNAPSHOTS[@]} -eq 0 ]; then
   log_info "No snapshots to merge."

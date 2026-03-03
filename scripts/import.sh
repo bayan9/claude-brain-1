@@ -56,7 +56,6 @@ import_dir_entries() {
   local resolved_base
   resolved_base=$(realpath -m "$base_dir")
 
-  if $_has_jq; then
     echo "$json_entries" | jq -r 'keys[]' | while read -r key; do
       # PATH TRAVERSAL CHECK: ensure key doesn't escape base_dir
       local resolved_target
@@ -72,31 +71,6 @@ import_dir_entries() {
         write_if_changed "${resolved_base}/${key}" "$content"
       fi
     done
-  elif $_has_python3; then
-    # Pass json_entries via stdin and base_dir via argv to avoid injection
-    echo "$json_entries" | python3 -c "
-import json, os, sys, hashlib
-base = os.path.realpath(sys.argv[1])
-entries = json.load(sys.stdin)
-for key, val in entries.items():
-    content = val.get('content', '')
-    if content:
-        path = os.path.realpath(os.path.join(base, key))
-        # Path traversal check
-        if not path.startswith(base + os.sep) and path != base:
-            print(f'BLOCKED path traversal attempt: {key}', file=sys.stderr)
-            continue
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        if os.path.exists(path):
-            with open(path) as f:
-                if f.read() == content:
-                    continue
-        with open(path, 'w') as f:
-            f.write(content)
-        os.chmod(path, 0o600)
-        print(f'Updated: {path}', file=sys.stderr)
-" "$base_dir"
-  fi
 }
 
 # ── Validate imported content ─────────────────────────────────────────────────
@@ -106,9 +80,6 @@ validate_imports() {
   local new_items=()
   local changed_items=()
 
-  if ! $_has_jq; then
-    return 0
-  fi
 
   # Check for new/changed skills
   echo "$brain" | jq -r '.procedural.skills // {} | keys[]' 2>/dev/null | while read -r skill_path; do
@@ -161,21 +132,12 @@ import_brain() {
   log_info "Importing consolidated brain..."
 
   # Validate schema version
-  if $_has_jq; then
-    local schema_ver
-    schema_ver=$(echo "$brain" | jq -r '.schema_version // "unknown"')
-    if [ "$schema_ver" != "1.0.0" ]; then
-      log_error "Unsupported brain schema version: ${schema_ver}. Expected 1.0.0."
-      log_error "You may need to update the claude-brain plugin."
-      exit 1
-    fi
-  elif $_has_python3; then
-    local schema_ver
-    schema_ver=$(echo "$brain" | python3 -c "import json,sys; print(json.load(sys.stdin).get('schema_version','unknown'))")
-    if [ "$schema_ver" != "1.0.0" ]; then
-      log_error "Unsupported brain schema version: ${schema_ver}. Expected 1.0.0."
-      exit 1
-    fi
+  local schema_ver
+  schema_ver=$(echo "$brain" | jq -r '.schema_version // "unknown"')
+  if [ "$schema_ver" != "1.0.0" ]; then
+    log_error "Unsupported brain schema version: ${schema_ver}. Expected 1.0.0."
+    log_error "You may need to update the claude-brain plugin."
+    exit 1
   fi
 
   # Create backup before importing (unless disabled)
@@ -189,44 +151,33 @@ import_brain() {
   fi
 
   # Declarative: CLAUDE.md
-  if $_has_jq; then
     local claude_md_content
     claude_md_content=$(echo "$brain" | jq -r '.declarative.claude_md.content // empty')
     if [ -n "$claude_md_content" ]; then
       write_if_changed "${CLAUDE_DIR}/CLAUDE.md" "$claude_md_content"
     fi
-  fi
 
   # Declarative: rules
-  if $_has_jq; then
     local rules
     rules=$(echo "$brain" | jq '.declarative.rules // {}')
     import_dir_entries "${CLAUDE_DIR}/rules" "$rules"
-  fi
 
   # Procedural: skills
-  if $_has_jq; then
     local skills
     skills=$(echo "$brain" | jq '.procedural.skills // {}')
     import_dir_entries "${CLAUDE_DIR}/skills" "$skills"
-  fi
 
   # Procedural: agents
-  if $_has_jq; then
     local agents
     agents=$(echo "$brain" | jq '.procedural.agents // {}')
     import_dir_entries "${CLAUDE_DIR}/agents" "$agents"
-  fi
 
   # Procedural: output styles
-  if $_has_jq; then
     local output_styles
     output_styles=$(echo "$brain" | jq '.procedural.output_styles // {}')
     import_dir_entries "${CLAUDE_DIR}/output-styles" "$output_styles"
-  fi
 
   # Experiential: auto memory
-  if $_has_jq; then
     echo "$brain" | jq -r '.experiential.auto_memory // {} | keys[]' 2>/dev/null | while read -r project; do
       local entries
       entries=$(echo "$brain" | jq --arg p "$project" '.experiential.auto_memory[$p] // {}')
@@ -246,10 +197,8 @@ import_brain() {
         import_dir_entries "$target_dir" "$entries"
       fi
     done
-  fi
 
   # Experiential: agent memory
-  if $_has_jq; then
     echo "$brain" | jq -r '.experiential.agent_memory // {} | keys[]' 2>/dev/null | while read -r agent; do
       # Sanitize agent name: block path traversal
       if echo "$agent" | grep -qE '(\.\.|/)'; then
@@ -260,10 +209,8 @@ import_brain() {
       entries=$(echo "$brain" | jq --arg a "$agent" '.experiential.agent_memory[$a] // {}')
       import_dir_entries "${CLAUDE_DIR}/agent-memory/${agent}" "$entries"
     done
-  fi
 
   # Environmental: settings (deep merge, preserve local env AND local mcpServers)
-  if $_has_jq; then
     local new_settings
     new_settings=$(echo "$brain" | jq '.environmental.settings.content // null')
     if [ "$new_settings" != "null" ] && [ -f "${CLAUDE_DIR}/settings.json" ]; then
@@ -283,10 +230,8 @@ import_brain() {
       chmod 600 "${CLAUDE_DIR}/settings.json"
       log_info "Created: settings.json"
     fi
-  fi
 
   # Environmental: keybindings (union)
-  if $_has_jq; then
     local new_keybindings
     new_keybindings=$(echo "$brain" | jq '.environmental.keybindings.content // null')
     if [ "$new_keybindings" != "null" ]; then
@@ -302,10 +247,8 @@ import_brain() {
         log_info "Created: keybindings.json"
       fi
     fi
-  fi
 
   # Shared namespace: import to local directories (skills, agents, rules)
-  if $_has_jq; then
     # Shared skills
     local shared_skills
     shared_skills=$(echo "$brain" | jq '.shared.skills // {}')
@@ -320,7 +263,6 @@ import_brain() {
     local shared_rules
     shared_rules=$(echo "$brain" | jq '.shared.rules // {}')
     import_dir_entries "${CLAUDE_DIR}/rules" "$shared_rules"
-  fi
 
   log_info "Brain import complete."
 }

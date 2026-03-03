@@ -128,14 +128,12 @@ else
 fi
 
 # Update local config
-if $_has_jq; then
   local_tmp=$(brain_mktemp)
   jq --arg ts "$(now_iso)" '.last_pull = $ts' "$BRAIN_CONFIG" > "$local_tmp"
   mv "$local_tmp" "$BRAIN_CONFIG"
-fi
 
 # Check if auto-evolve is due
-if $_has_jq && [ -f "$DEFAULTS_FILE" ]; then
+if [ -f "$DEFAULTS_FILE" ]; then
   local evolve_interval_days last_evolved days_since_evolve
   evolve_interval_days=$(jq -r '.evolve_interval_days // 7' "$DEFAULTS_FILE")
   last_evolved=$(jq -r '.last_evolved // null' "$BRAIN_CONFIG")
