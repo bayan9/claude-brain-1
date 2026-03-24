@@ -568,7 +568,8 @@ decode_project_path() {
   local encoded="$1"
   # First restore leading slash, then un-double hyphens temporarily,
   # then convert remaining single hyphens to slashes, then restore hyphens
-  echo "$encoded" | sed 's/^-/\//' | sed 's/--/\x00/g' | sed 's/-/\//g' | sed 's/\x00/-/g'
+  # Use printf for null byte (macOS sed doesn't support \x00 in patterns)
+  echo "$encoded" | sed 's/^-/\//' | sed "s/--/$(printf '\001')/g" | sed 's/-/\//g' | sed "s/$(printf '\001')/-/g"
 }
 
 encode_project_path() {
