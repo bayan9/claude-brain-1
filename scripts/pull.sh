@@ -154,7 +154,8 @@ if [ -f "$DEFAULTS_FILE" ]; then
       days_since_evolve=$(( (current_ts - last_evolved_ts) / 86400 ))
       
       if [ "$days_since_evolve" -ge "$evolve_interval_days" ]; then
-        log_info "Auto-evolve due (${days_since_evolve} days since last evolution). Run /brain-evolve manually."
+        # Always show evolve notification (even in quiet mode) since it requires user action
+        echo "[claude-brain] INFO: Auto-evolve due (${days_since_evolve} days since last evolution). Run /brain-evolve manually." >&2
         # NOTE: evolve.sh calls `claude -p` which cannot run nested inside
         # an active Claude Code session. Auto-evolve is notification-only;
         # the user should run /brain-evolve from a fresh session or terminal.

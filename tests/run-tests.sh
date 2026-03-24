@@ -483,17 +483,6 @@ test_auto_evolve_trigger() {
 
   json_set "$BRAIN_CONFIG" "last_evolved" "$eight_days_ago"
 
-  # Create a mock evolve.sh that just touches a marker
-  local real_evolve="$PROJECT_DIR/scripts/evolve.sh"
-  local backup_evolve="$TEST_DIR/evolve.sh.bak"
-  cp "$real_evolve" "$backup_evolve"
-
-  cat > "$real_evolve" <<'MOCK'
-#!/usr/bin/env bash
-touch "$HOME/.claude/evolve-triggered"
-MOCK
-  chmod +x "$real_evolve"
-
   # Create a machine snapshot so pull.sh has something to work with
   local machine_id
   machine_id=$(jqr ".machine_id" "$BRAIN_CONFIG")
@@ -511,38 +500,28 @@ MOCK
   # Run pull.sh
   bash "$PROJECT_DIR/scripts/pull.sh" --quiet 2>/dev/null || true
 
-  # Restore real evolve.sh
-  cp "$backup_evolve" "$real_evolve"
+  # pull.sh now logs a notification instead of running evolve.sh directly
+  # (evolve.sh calls claude -p which can't run inside active sessions)
+  local pull_output
+  pull_output=$(bash "$PROJECT_DIR/scripts/pull.sh" --quiet 2>&1) || true
 
-  if [ -f "$HOME/.claude/evolve-triggered" ]; then
-    pass "Auto-evolve triggered after 8 days"
-    rm -f "$HOME/.claude/evolve-triggered"
+  if echo "$pull_output" | grep -q "Auto-evolve due"; then
+    pass "Auto-evolve notification shown after 8 days"
   else
-    fail "Auto-evolve not triggered after 8 days"
+    fail "Auto-evolve notification not shown after 8 days"
   fi
 
-  # Now test that it does NOT trigger after 2 days
+  # Now test that it does NOT notify after 2 days
   local two_days_ago
   two_days_ago=$(date -d "2 days ago" -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -v-2d -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null)
   json_set "$BRAIN_CONFIG" "last_evolved" "$two_days_ago"
 
-  # Mock evolve again
-  cp "$real_evolve" "$backup_evolve"
-  cat > "$real_evolve" <<'MOCK'
-#!/usr/bin/env bash
-touch "$HOME/.claude/evolve-triggered"
-MOCK
-  chmod +x "$real_evolve"
+  pull_output=$(bash "$PROJECT_DIR/scripts/pull.sh" --quiet 2>&1) || true
 
-  bash "$PROJECT_DIR/scripts/pull.sh" --quiet 2>/dev/null || true
-
-  cp "$backup_evolve" "$real_evolve"
-
-  if [ ! -f "$HOME/.claude/evolve-triggered" ]; then
-    pass "Auto-evolve NOT triggered after 2 days"
+  if echo "$pull_output" | grep -q "Auto-evolve due"; then
+    fail "Auto-evolve notification incorrectly shown after 2 days"
   else
-    fail "Auto-evolve incorrectly triggered after 2 days"
-    rm -f "$HOME/.claude/evolve-triggered"
+    pass "Auto-evolve notification NOT shown after 2 days"
   fi
 }
 
@@ -767,6 +746,78 @@ test_memory_merge_no_duplicates() {
   fi
 }
 
+test_evolve_prepare() {
+  section "Evolve prepare (no LLM needed)"
+
+  # Create a consolidated brain with some memory content
+  cat > "$BRAIN_REPO/consolidated/brain.json" <<'EOF'
+{
+  "schema_version": "1.0.0",
+  "machine": {"id": "test", "name": "test"},
+  "declarative": {
+    "claude_md": {"content": "# Rules\n- Use pnpm\n- Always test", "hash": ""},
+    "rules": {"linting.md": {"content": "Run linting before commit.", "hash": ""}}
+  },
+  "procedural": {
+    "skills": {"review/SKILL.md": {"content": "Review code", "hash": ""}},
+    "agents": {},
+    "output_styles": {}
+  },
+  "experiential": {
+    "auto_memory": {
+      "my-project": {
+        "MEMORY.md": {"content": "- Use vitest\n- Database is PostgreSQL", "hash": ""}
+      }
+    },
+    "agent_memory": {}
+  },
+  "environmental": {"settings": {"content": {}, "hash": ""}, "keybindings": {"content": [], "hash": ""}},
+  "shared": {"skills": {}, "agents": {}, "rules": {}}
+}
+EOF
+
+  (cd "$BRAIN_REPO" && git add -A && git commit -q -m "consolidated for evolve" 2>/dev/null || true)
+
+  # Run evolve-prepare (should NOT call claude -p, should produce a context file)
+  local output="$BRAIN_REPO/meta/evolve-context.json"
+  bash "$PROJECT_DIR/scripts/evolve-prepare.sh" --output "$output" 2>/dev/null || true
+
+  if [ ! -f "$output" ]; then
+    fail "evolve-prepare.sh did not produce output file"
+    return
+  fi
+
+  if json_valid "$output"; then
+    pass "evolve-context.json is valid JSON"
+  else
+    fail "evolve-context.json is not valid JSON"
+    return
+  fi
+
+  # Check it has the required fields for the skill to analyze
+  local has_claude_md has_memory has_rules has_skills has_prompt
+  has_claude_md=$(jq 'has("current_claude_md")' "$output" 2>/dev/null)
+  has_memory=$(jq 'has("all_memory")' "$output" 2>/dev/null)
+  has_rules=$(jq 'has("current_rules")' "$output" 2>/dev/null)
+  has_skills=$(jq 'has("current_skills")' "$output" 2>/dev/null)
+  has_prompt=$(jq 'has("evolve_prompt")' "$output" 2>/dev/null)
+
+  if [ "$has_claude_md" = "true" ]; then pass "Has current_claude_md"; else fail "Missing current_claude_md"; fi
+  if [ "$has_memory" = "true" ]; then pass "Has all_memory"; else fail "Missing all_memory"; fi
+  if [ "$has_rules" = "true" ]; then pass "Has current_rules"; else fail "Missing current_rules"; fi
+  if [ "$has_skills" = "true" ]; then pass "Has current_skills"; else fail "Missing current_skills"; fi
+  if [ "$has_prompt" = "true" ]; then pass "Has evolve_prompt"; else fail "Missing evolve_prompt"; fi
+
+  # Verify the prompt contains actual content (not empty)
+  local prompt_len
+  prompt_len=$(jq '.evolve_prompt | length' "$output" 2>/dev/null || echo "0")
+  if [ "$prompt_len" -gt 100 ]; then
+    pass "evolve_prompt has substantive content (${prompt_len} chars)"
+  else
+    fail "evolve_prompt too short (${prompt_len} chars)"
+  fi
+}
+
 test_backward_compat_no_deletions() {
   section "Backward compat: snapshot without deletions field"
 
@@ -901,6 +952,7 @@ test_deletion_applied_on_import
 test_memory_merge_union
 test_memory_merge_no_duplicates
 test_backward_compat_no_deletions
+test_evolve_prepare
 
 echo ""
 echo "================================"
