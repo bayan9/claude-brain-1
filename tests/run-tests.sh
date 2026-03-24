@@ -605,6 +605,67 @@ test_encryption_roundtrip() {
 
 # ── Deletion & Memory Merge Tests ─────────────────────────────────────────────
 
+test_deletion_respected_in_merge() {
+  section "Deletion respected in structured merge"
+
+  local snap_a="$TEST_DIR/snap-merge-del-a.json"
+  local snap_b="$TEST_DIR/snap-merge-del-b.json"
+  local merged="$TEST_DIR/snap-merge-del-result.json"
+
+  # Machine A: has the skill, no deletions
+  cat > "$snap_a" <<'EOF'
+{
+  "schema_version": "1.0.0",
+  "machine": {"id": "aaa", "name": "machine-a"},
+  "declarative": {"claude_md": {"content": "", "hash": ""}, "rules": {}},
+  "procedural": {
+    "skills": {"stale-skill.md": {"content": "old skill", "hash": "sha256:old"}},
+    "agents": {},
+    "output_styles": {}
+  },
+  "experiential": {"auto_memory": {}, "agent_memory": {}},
+  "environmental": {"settings": {"content": {}}, "keybindings": {"content": []}, "mcp_servers": {}},
+  "shared": {"skills": {}, "agents": {}, "rules": {}}
+}
+EOF
+
+  # Machine B: deleted the skill, has deletion record
+  cat > "$snap_b" <<'EOF'
+{
+  "schema_version": "1.0.0",
+  "machine": {"id": "bbb", "name": "machine-b"},
+  "deletions": {
+    "procedural.skills": ["stale-skill.md"]
+  },
+  "declarative": {"claude_md": {"content": "", "hash": ""}, "rules": {}},
+  "procedural": {
+    "skills": {},
+    "agents": {},
+    "output_styles": {}
+  },
+  "experiential": {"auto_memory": {}, "agent_memory": {}},
+  "environmental": {"settings": {"content": {}}, "keybindings": {"content": []}, "mcp_servers": {}},
+  "shared": {"skills": {}, "agents": {}, "rules": {}}
+}
+EOF
+
+  bash "$PROJECT_DIR/scripts/merge-structured.sh" "$snap_a" "$snap_b" "$merged" 2>/dev/null || true
+
+  if [ ! -f "$merged" ]; then
+    fail "merge-structured.sh did not produce output"
+    return
+  fi
+
+  # The deleted skill should NOT be in the merged result
+  local has_stale
+  has_stale=$(jq '.procedural.skills | has("stale-skill.md")' "$merged" 2>/dev/null)
+  if [ "$has_stale" = "false" ]; then
+    pass "Deleted skill removed from merged result"
+  else
+    fail "Deleted skill still present in merged result"
+  fi
+}
+
 test_deletion_tracking() {
   section "Deletion tracking in export"
 
@@ -678,6 +739,7 @@ test_auto_evolve_trigger
 test_wsl_detection
 test_encryption_roundtrip
 test_deletion_tracking
+test_deletion_respected_in_merge
 
 echo ""
 echo "================================"

@@ -41,23 +41,32 @@ def deep_merge:
 
 .[0] as $base | .[1] as $other |
 
+# Collect deletions from both machines (backward compatible: default to empty)
+($base.deletions // {}) as $base_del |
+($other.deletions // {}) as $other_del |
+
+# Helper: remove deleted keys from a merged object
+def apply_deletions($dels; $section):
+  ($dels[$section] // []) as $to_remove |
+  if ($to_remove | length) > 0 then
+    [to_entries[] | select(.key as $k | $to_remove | index($k) | not)] | from_entries
+  else . end;
+
 # Merge declarative: CLAUDE.md kept from base (semantic merge handles this)
-# Merge declarative: rules (union by filename)
+# Merge declarative: rules (union by filename, minus deletions)
 ($base.declarative.rules // {}) as $base_rules |
 ($other.declarative.rules // {}) as $other_rules |
-($base_rules * $other_rules) as $merged_rules |
+(($base_rules * $other_rules) | apply_deletions($base_del; "declarative.rules") | apply_deletions($other_del; "declarative.rules")) as $merged_rules |
 
-# Merge procedural: skills (union by name)
+# Merge procedural: skills (union by name, minus deletions)
 ($base.procedural.skills // {}) as $base_skills |
 ($other.procedural.skills // {}) as $other_skills |
-# For skills: if both have it and content differs, keep base (semantic merge handles conflicts)
-# If only one has it, take it
-([$base_skills, $other_skills] | add // {}) as $merged_skills |
+(([$base_skills, $other_skills] | add // {}) | apply_deletions($base_del; "procedural.skills") | apply_deletions($other_del; "procedural.skills")) as $merged_skills |
 
-# Merge procedural: agents (union by name)
+# Merge procedural: agents (union by name, minus deletions)
 ($base.procedural.agents // {}) as $base_agents |
 ($other.procedural.agents // {}) as $other_agents |
-([$base_agents, $other_agents] | add // {}) as $merged_agents |
+(([$base_agents, $other_agents] | add // {}) | apply_deletions($base_del; "procedural.agents") | apply_deletions($other_del; "procedural.agents")) as $merged_agents |
 
 # Merge procedural: output_styles (union)
 ($base.procedural.output_styles // {}) as $base_styles |
@@ -89,8 +98,15 @@ def deep_merge:
 ($other.experiential.agent_memory // {}) as $other_amem |
 ([$base_amem, $other_amem] | add // {}) as $merged_amem |
 
-# Assemble merged brain
-$base * {
+# Combine deletions from both machines
+([$base_del, $other_del] | add // {}) as $merged_del |
+
+# Assemble merged brain (explicit construction, not $base * {...} to avoid deep merge reintroducing deleted keys)
+{
+  schema_version: $base.schema_version,
+  exported_at: $base.exported_at,
+  machine: $base.machine,
+  deletions: $merged_del,
   declarative: {
     claude_md: $base.declarative.claude_md,
     rules: $merged_rules
@@ -108,6 +124,11 @@ $base * {
     settings: { content: $merged_settings, hash: "merged" },
     keybindings: { content: $merged_kb, hash: "merged" },
     mcp_servers: $merged_mcp
+  },
+  shared: {
+    skills: (($base.shared.skills // {}) * ($other.shared.skills // {})),
+    agents: (($base.shared.agents // {}) * ($other.shared.agents // {})),
+    rules: (($base.shared.rules // {}) * ($other.shared.rules // {}))
   }
 }
 ' "$BASE" "$OTHER" > "$OUTPUT"
