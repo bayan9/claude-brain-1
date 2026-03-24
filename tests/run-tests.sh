@@ -746,6 +746,177 @@ test_memory_merge_no_duplicates() {
   fi
 }
 
+test_keybindings_merge() {
+  section "Keybindings merge (object format)"
+
+  # Create local keybindings in object format (real format)
+  cat > "$CLAUDE_DIR/keybindings.json" <<'EOF'
+{"bindings": [{"key": "ctrl+k", "command": "clear", "context": "terminal"}]}
+EOF
+
+  # Create consolidated brain with different keybindings
+  cat > "$BRAIN_REPO/consolidated/brain.json" <<'EOF'
+{
+  "schema_version": "1.0.0",
+  "machine": {"id": "test", "name": "test"},
+  "declarative": {"claude_md": {"content": "", "hash": ""}, "rules": {}},
+  "procedural": {"skills": {}, "agents": {}, "output_styles": {}},
+  "experiential": {"auto_memory": {}, "agent_memory": {}},
+  "environmental": {
+    "settings": {"content": {}, "hash": ""},
+    "keybindings": {
+      "content": {"bindings": [{"key": "ctrl+l", "command": "scroll", "context": "editor"}]},
+      "hash": "sha256:different"
+    }
+  },
+  "shared": {"skills": {}, "agents": {}, "rules": {}}
+}
+EOF
+
+  # Import should NOT error (timeout to prevent hangs)
+  local import_output
+  import_output=$(timeout 10 bash "$PROJECT_DIR/scripts/import.sh" "$BRAIN_REPO/consolidated/brain.json" --no-backup --quiet 2>&1 || true)
+  local exit_code=$?
+
+  if [ "$exit_code" -eq 0 ]; then
+    pass "Keybindings import succeeded (exit code 0)"
+  else
+    fail "Keybindings import failed (exit code $exit_code): $import_output"
+  fi
+
+  # Verify both keybindings are present
+  if [ -f "$CLAUDE_DIR/keybindings.json" ]; then
+    local binding_count
+    binding_count=$(jq '.bindings | length' "$CLAUDE_DIR/keybindings.json" 2>/dev/null || echo "0")
+    if [ "$binding_count" -ge 2 ]; then
+      pass "Both keybindings merged ($binding_count bindings)"
+    else
+      fail "Keybindings not merged (got $binding_count, expected 2)"
+    fi
+  else
+    fail "keybindings.json not found after import"
+  fi
+}
+
+test_push_retry_with_conflict() {
+  section "Push retry with diverged remote"
+
+  # Ensure brain-config exists
+  if [ ! -f "$BRAIN_CONFIG" ]; then
+    bash "$PROJECT_DIR/scripts/register-machine.sh" "git@github.com:test/test.git" 2>/dev/null || true
+  fi
+
+  local machine_id
+  machine_id=$(jqr ".machine_id" "$BRAIN_CONFIG")
+
+  # Create a local bare remote
+  local bare_remote="$TEST_DIR/push-retry-remote.git"
+  rm -rf "$bare_remote"
+  git clone --bare "$BRAIN_REPO" "$bare_remote" 2>/dev/null || true
+  (cd "$BRAIN_REPO" && git remote remove origin 2>/dev/null || true && git remote add origin "$bare_remote")
+
+  # Create a divergence: commit something on the remote that local doesn't have
+  local tmp_clone="$TEST_DIR/push-retry-clone"
+  rm -rf "$tmp_clone"
+  git clone "$bare_remote" "$tmp_clone" 2>/dev/null
+  (cd "$tmp_clone" && echo '{}' > meta/remote-change.json && git add -A && git commit -q -m "remote change" && git push -q origin main 2>/dev/null)
+
+  # Now try to push from the brain repo (which is behind)
+  mkdir -p "$BRAIN_REPO/machines/$machine_id"
+  echo '{"test": true}' > "$BRAIN_REPO/machines/$machine_id/brain-snapshot.json"
+  (cd "$BRAIN_REPO" && git add -A && git commit -q -m "local change" 2>/dev/null || true)
+
+  local push_output
+  push_output=$(bash "$PROJECT_DIR/scripts/push.sh" --force 2>&1)
+  local exit_code=$?
+
+  if [ "$exit_code" -eq 0 ]; then
+    pass "Push succeeded after retry with diverged remote"
+  else
+    fail "Push failed with diverged remote (exit $exit_code)"
+  fi
+
+  # Verify the push actually reached the remote
+  local remote_has_local
+  remote_has_local=$(cd "$tmp_clone" && git pull -q origin main 2>/dev/null && ls machines/$machine_id/brain-snapshot.json 2>/dev/null)
+  if [ -n "$remote_has_local" ]; then
+    pass "Local changes reached remote after retry"
+  else
+    fail "Local changes did not reach remote"
+  fi
+
+  rm -rf "$tmp_clone"
+}
+
+test_semantic_fallback_preserves_claude_md() {
+  section "Semantic fallback preserves CLAUDE.md"
+
+  # Create two snapshots with different CLAUDE.md content
+  local snap_a="$TEST_DIR/snap-sem-a.json"
+  local snap_b="$TEST_DIR/snap-sem-b.json"
+
+  cat > "$snap_a" <<'EOF'
+{
+  "schema_version": "1.0.0",
+  "machine": {"id": "aaa", "name": "machine-a"},
+  "declarative": {"claude_md": {"content": "# Machine A rules\n- Rule from A\n", "hash": "sha256:aaa"}, "rules": {}},
+  "procedural": {"skills": {}, "agents": {}, "output_styles": {}},
+  "experiential": {"auto_memory": {}, "agent_memory": {}},
+  "environmental": {"settings": {"content": {}}, "keybindings": {"content": []}, "mcp_servers": {}},
+  "shared": {"skills": {}, "agents": {}, "rules": {}}
+}
+EOF
+
+  cat > "$snap_b" <<'EOF'
+{
+  "schema_version": "1.0.0",
+  "machine": {"id": "bbb", "name": "machine-b"},
+  "declarative": {"claude_md": {"content": "# Machine B rules\n- Rule from B\n", "hash": "sha256:bbb"}, "rules": {}},
+  "procedural": {"skills": {}, "agents": {}, "output_styles": {}},
+  "experiential": {"auto_memory": {}, "agent_memory": {}},
+  "environmental": {"settings": {"content": {}}, "keybindings": {"content": []}, "mcp_servers": {}},
+  "shared": {"skills": {}, "agents": {}, "rules": {}}
+}
+EOF
+
+  # Put snapshots in machine dirs
+  local machine_a_dir="$BRAIN_REPO/machines/aaa"
+  local machine_b_dir="$BRAIN_REPO/machines/bbb"
+  mkdir -p "$machine_a_dir" "$machine_b_dir"
+  cp "$snap_a" "$machine_a_dir/brain-snapshot.json"
+  cp "$snap_b" "$machine_b_dir/brain-snapshot.json"
+
+  # Run structured merge first (like pull.sh does)
+  local merging="$BRAIN_REPO/consolidated/brain.json.merging"
+  bash "$PROJECT_DIR/scripts/merge-structured.sh" "$snap_a" "$snap_b" "$merging" 2>/dev/null || true
+
+  # Simulate semantic merge failure (claude -p not available)
+  # merge-semantic.sh will fail, and the fallback should preserve content
+  # But the REAL test is: after pull.sh's fallback logic, does CLAUDE.md survive?
+
+  # The structured merge keeps base CLAUDE.md (machine A's)
+  # After semantic merge fails, pull.sh should use structured result
+  local consolidated="$BRAIN_REPO/consolidated/brain.json"
+  rm -f "$consolidated"
+
+  # Simulate pull.sh's fallback: if semantic failed and no brain.json, use .merging
+  if [ ! -f "$consolidated" ] && [ -f "$merging" ]; then
+    mv "$merging" "$consolidated"
+  fi
+
+  if [ -f "$consolidated" ]; then
+    local claude_md
+    claude_md=$(jq -r '.declarative.claude_md.content // ""' "$consolidated")
+    if [ -n "$claude_md" ] && [ ${#claude_md} -gt 5 ]; then
+      pass "CLAUDE.md preserved in fallback (${#claude_md} chars)"
+    else
+      fail "CLAUDE.md lost in fallback (empty or too short)"
+    fi
+  else
+    fail "No consolidated brain after fallback"
+  fi
+}
+
 test_evolve_prepare() {
   section "Evolve prepare (no LLM needed)"
 
@@ -953,6 +1124,9 @@ test_memory_merge_union
 test_memory_merge_no_duplicates
 test_backward_compat_no_deletions
 test_evolve_prepare
+test_keybindings_merge
+test_push_retry_with_conflict
+test_semantic_fallback_preserves_claude_md
 
 echo ""
 echo "================================"

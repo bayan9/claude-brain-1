@@ -326,8 +326,12 @@ import_brain() {
       if [ -f "${CLAUDE_DIR}/keybindings.json" ]; then
         local tmp
         tmp=$(brain_mktemp)
-        # Union keybindings arrays (deduplicate by key+command)
-        jq -s '.[0] + .[1] | unique_by(.key, .command)' "${CLAUDE_DIR}/keybindings.json" <(echo "$new_keybindings") > "$tmp"
+        # Union keybindings: handle both object format {"bindings":[...]} and bare array [...]
+        jq -s '
+          def get_bindings: if type == "array" then . elif type == "object" then (.bindings // []) else [] end;
+          (.[0] | get_bindings) + (.[1] | get_bindings) | unique_by(.key, .command) |
+          { bindings: . }
+        ' "${CLAUDE_DIR}/keybindings.json" <(echo "$new_keybindings") > "$tmp"
         mv "$tmp" "${CLAUDE_DIR}/keybindings.json"
         log_info "Updated: keybindings.json (merged)"
       else
