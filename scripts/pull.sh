@@ -154,10 +154,10 @@ if [ -f "$DEFAULTS_FILE" ]; then
       days_since_evolve=$(( (current_ts - last_evolved_ts) / 86400 ))
       
       if [ "$days_since_evolve" -ge "$evolve_interval_days" ]; then
-        log_info "Auto-evolve due (${days_since_evolve} days since last evolution)..."
-        "${SCRIPT_DIR}/evolve.sh" --auto 2>/dev/null || {
-          log_warn "Auto-evolve failed. Run /brain-evolve manually."
-        }
+        log_info "Auto-evolve due (${days_since_evolve} days since last evolution). Run /brain-evolve manually."
+        # NOTE: evolve.sh calls `claude -p` which cannot run nested inside
+        # an active Claude Code session. Auto-evolve is notification-only;
+        # the user should run /brain-evolve from a fresh session or terminal.
       fi
     fi
   fi
