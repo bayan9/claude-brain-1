@@ -586,3 +586,16 @@ project_name_from_encoded() {
   decoded=$(decode_project_path "$encoded")
   basename "$decoded"
 }
+
+# Compute deletions between previous and current snapshot for a given section.
+# Outputs a JSON array of keys present in prev but absent in current.
+# Usage: compute_section_deletions "$prev_json" "$curr_json" "procedural.skills"
+compute_section_deletions() {
+  local prev="$1" curr="$2" section="$3"
+  jq -n --argjson prev "$prev" --argjson curr "$curr" --arg sec "$section" '
+    ($sec | split(".")) as $path |
+    ($prev | getpath($path) // {}) as $prev_keys |
+    ($curr | getpath($path) // {}) as $curr_keys |
+    [$prev_keys | keys[] | select(. as $k | $curr_keys | has($k) | not)]
+  ' 2>/dev/null || echo '[]'
+}

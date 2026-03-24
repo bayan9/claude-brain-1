@@ -253,6 +253,27 @@ if ! $SKIP_SECRET_SCAN; then
   fi
 fi
 
+# Compute deletions by diffing against previous snapshot in git
+deletions='{}'
+if [ -n "${BRAIN_REPO:-}" ]; then
+  machine_id=$(get_machine_id 2>/dev/null || echo "")
+  if [ -n "$machine_id" ]; then
+    prev_snapshot=$(brain_git show HEAD:machines/${machine_id}/brain-snapshot.json 2>/dev/null || echo '{}')
+    if [ "$prev_snapshot" != "{}" ]; then
+      deletions=$(jq -n \
+        --argjson d_rules "$(compute_section_deletions "$prev_snapshot" "$snapshot" "declarative.rules")" \
+        --argjson d_skills "$(compute_section_deletions "$prev_snapshot" "$snapshot" "procedural.skills")" \
+        --argjson d_agents "$(compute_section_deletions "$prev_snapshot" "$snapshot" "procedural.agents")" \
+        '{
+          "declarative.rules": $d_rules,
+          "procedural.skills": $d_skills,
+          "procedural.agents": $d_agents
+        }' 2>/dev/null || echo '{}')
+    fi
+  fi
+fi
+snapshot=$(echo "$snapshot" | jq --argjson del "$deletions" '. + {deletions: $del}')
+
 # Compute top-level hash for quick change detection
 snapshot_hash=$(echo "$snapshot" | compute_hash)
 

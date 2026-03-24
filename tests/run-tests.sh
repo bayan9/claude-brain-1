@@ -603,6 +603,58 @@ test_encryption_roundtrip() {
   fi
 }
 
+# ── Deletion & Memory Merge Tests ─────────────────────────────────────────────
+
+test_deletion_tracking() {
+  section "Deletion tracking in export"
+
+  # First export (creates initial snapshot with skills/review/SKILL.md)
+  local snap1="$TEST_DIR/snap-del-1.json"
+  bash "$PROJECT_DIR/scripts/export.sh" --output "$snap1" --skip-secret-scan --quiet 2>/dev/null || true
+
+  # Commit the first snapshot to git so we have history to diff against
+  local machine_id
+  machine_id=$(jqr ".machine.id" "$snap1")
+  mkdir -p "$BRAIN_REPO/machines/$machine_id"
+  cp "$snap1" "$BRAIN_REPO/machines/$machine_id/brain-snapshot.json"
+  (cd "$BRAIN_REPO" && git add -A && git commit -q -m "initial snapshot")
+
+  # Verify the skill exists in first snapshot
+  local has_skill
+  has_skill=$(jq '.procedural.skills | has("review/SKILL.md")' "$snap1" 2>/dev/null)
+  if [ "$has_skill" = "true" ]; then
+    pass "Initial snapshot has review/SKILL.md"
+  else
+    fail "Initial snapshot missing review/SKILL.md"
+    return
+  fi
+
+  # Delete the skill locally
+  rm -rf "$CLAUDE_DIR/skills/review"
+
+  # Second export
+  local snap2="$TEST_DIR/snap-del-2.json"
+  bash "$PROJECT_DIR/scripts/export.sh" --output "$snap2" --skip-secret-scan --quiet 2>/dev/null || true
+
+  # Assert: deletions field exists and lists the removed skill
+  local has_deletions
+  has_deletions=$(jq 'has("deletions")' "$snap2" 2>/dev/null)
+  if [ "$has_deletions" = "true" ]; then
+    pass "Snapshot has deletions field"
+  else
+    fail "Snapshot missing deletions field"
+    return
+  fi
+
+  local skill_deleted
+  skill_deleted=$(jq '.deletions["procedural.skills"] // [] | index("review/SKILL.md") != null' "$snap2" 2>/dev/null)
+  if [ "$skill_deleted" = "true" ]; then
+    pass "Deletions lists review/SKILL.md"
+  else
+    fail "Deletions does not list review/SKILL.md"
+  fi
+}
+
 # ── Run ────────────────────────────────────────────────────────────────────────
 echo -e "${CYAN}claude-brain integration tests${NC}"
 echo "================================"
@@ -625,6 +677,7 @@ test_shared_namespace
 test_auto_evolve_trigger
 test_wsl_detection
 test_encryption_roundtrip
+test_deletion_tracking
 
 echo ""
 echo "================================"
