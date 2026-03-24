@@ -45,6 +45,80 @@ write_if_changed() {
   log_info "Updated: $target"
 }
 
+# ── Helper: merge memory file by unioning lines ──────────────────────────────
+# For MEMORY.md files: union lines from both, deduplicate, preserve local order
+merge_memory_file() {
+  local target="$1" new_content="$2"
+  if [ -z "$new_content" ] || [ "$new_content" = "null" ]; then
+    return 0
+  fi
+  mkdir -p "$(dirname "$target")"
+  if [ ! -f "$target" ]; then
+    echo "$new_content" > "$target"
+    chmod 600 "$target"
+    log_info "Created: $target"
+    return 0
+  fi
+
+  # Read existing content
+  local existing
+  existing=$(cat "$target")
+
+  # Find lines in new_content that aren't in existing (by exact match)
+  local new_lines
+  new_lines=$(comm -23 <(echo "$new_content" | grep -v '^$' | sort) <(echo "$existing" | grep -v '^$' | sort) 2>/dev/null || true)
+
+  if [ -n "$new_lines" ]; then
+    # Append new unique lines
+    echo "" >> "$target"
+    echo "$new_lines" >> "$target"
+    # Remove any blank lines at start/end and deduplicate blank lines
+    local cleaned
+    cleaned=$(cat "$target" | grep -v '^$' | awk '!seen[$0]++')
+    echo "$cleaned" > "$target"
+    chmod 600 "$target"
+    log_info "Updated: $target (merged ${new_lines_count:-0} new entries)"
+  fi
+}
+
+# ── Helper: process deletions ─────────────────────────────────────────────────
+process_deletions() {
+  local brain="$1"
+  local deletions
+  deletions=$(echo "$brain" | jq '.deletions // {}')
+
+  if [ "$deletions" = "{}" ] || [ "$deletions" = "null" ]; then
+    return 0
+  fi
+
+  # Process skill deletions
+  echo "$deletions" | jq -r '.["procedural.skills"] // [] | .[]' 2>/dev/null | while read -r skill; do
+    local target="${CLAUDE_DIR}/skills/${skill}"
+    if [ -f "$target" ]; then
+      rm -f "$target"
+      log_info "Deleted: $target (from sync deletions)"
+    fi
+  done
+
+  # Process rule deletions
+  echo "$deletions" | jq -r '.["declarative.rules"] // [] | .[]' 2>/dev/null | while read -r rule; do
+    local target="${CLAUDE_DIR}/rules/${rule}"
+    if [ -f "$target" ]; then
+      rm -f "$target"
+      log_info "Deleted: $target (from sync deletions)"
+    fi
+  done
+
+  # Process agent deletions
+  echo "$deletions" | jq -r '.["procedural.agents"] // [] | .[]' 2>/dev/null | while read -r agent; do
+    local target="${CLAUDE_DIR}/agents/${agent}"
+    if [ -f "$target" ]; then
+      rm -f "$target"
+      log_info "Deleted: $target (from sync deletions)"
+    fi
+  done
+}
+
 # ── Helper: import directory entries ───────────────────────────────────────────
 import_dir_entries() {
   local base_dir="$1" json_entries="$2"
@@ -150,6 +224,9 @@ import_brain() {
     validate_imports "$brain"
   fi
 
+  # Process deletions first (remove files that were intentionally deleted on other machines)
+  process_deletions "$brain"
+
   # Declarative: CLAUDE.md
     local claude_md_content
     claude_md_content=$(echo "$brain" | jq -r '.declarative.claude_md.content // empty')
@@ -194,7 +271,18 @@ import_brain() {
         done
       fi
       if [ -n "$target_dir" ]; then
-        import_dir_entries "$target_dir" "$entries"
+        # For MEMORY.md: use union merge instead of full replace
+        local memory_content
+        memory_content=$(echo "$entries" | jq -r '.["MEMORY.md"].content // empty' 2>/dev/null)
+        if [ -n "$memory_content" ]; then
+          merge_memory_file "${target_dir}/MEMORY.md" "$memory_content"
+          # Import remaining files (excluding MEMORY.md) normally
+          local other_entries
+          other_entries=$(echo "$entries" | jq 'del(.["MEMORY.md"])' 2>/dev/null)
+          import_dir_entries "$target_dir" "$other_entries"
+        else
+          import_dir_entries "$target_dir" "$entries"
+        fi
       fi
     done
 

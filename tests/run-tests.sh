@@ -666,6 +666,163 @@ EOF
   fi
 }
 
+test_deletion_applied_on_import() {
+  section "Deletion applied on import"
+
+  # Create a local skill file that should be deleted
+  echo "# To be deleted" > "$CLAUDE_DIR/skills/to-delete.md"
+
+  # Create consolidated brain with deletion for this file
+  cat > "$BRAIN_REPO/consolidated/brain.json" <<'EOF'
+{
+  "schema_version": "1.0.0",
+  "machine": {"id": "test", "name": "test"},
+  "deletions": {
+    "procedural.skills": ["to-delete.md"]
+  },
+  "declarative": {"claude_md": {"content": "", "hash": ""}, "rules": {}},
+  "procedural": {"skills": {}, "agents": {}, "output_styles": {}},
+  "experiential": {"auto_memory": {}, "agent_memory": {}},
+  "environmental": {"settings": {"content": {}, "hash": ""}, "keybindings": {"content": [], "hash": ""}},
+  "shared": {"skills": {}, "agents": {}, "rules": {}}
+}
+EOF
+
+  bash "$PROJECT_DIR/scripts/import.sh" "$BRAIN_REPO/consolidated/brain.json" --no-backup --quiet 2>/dev/null || true
+
+  if [ ! -f "$CLAUDE_DIR/skills/to-delete.md" ]; then
+    pass "Deleted skill removed from local filesystem"
+  else
+    fail "Deleted skill still exists locally"
+  fi
+}
+
+test_memory_merge_union() {
+  section "Memory file union merge"
+
+  # Set up local MEMORY.md using the existing my-project dir (from sandbox setup)
+  cat > "$CLAUDE_DIR/projects/my-project/memory/MEMORY.md" <<'EOF'
+- [a.md](a.md) - Entry A from local
+- [b.md](b.md) - Entry B from local
+EOF
+
+  # The project name decoded from "my-project" is "project" (decode_project_path convention)
+  local project_name
+  project_name=$(source "$PROJECT_DIR/scripts/common.sh" 2>/dev/null; project_name_from_encoded "my-project")
+
+  # Create consolidated brain with entries B and C using the decoded project name
+  cat > "$BRAIN_REPO/consolidated/brain.json" <<EOF
+{
+  "schema_version": "1.0.0",
+  "machine": {"id": "test", "name": "test"},
+  "declarative": {"claude_md": {"content": "", "hash": ""}, "rules": {}},
+  "procedural": {"skills": {}, "agents": {}, "output_styles": {}},
+  "experiential": {
+    "auto_memory": {
+      "${project_name}": {
+        "MEMORY.md": {
+          "content": "- [b.md](b.md) - Entry B from local\n- [c.md](c.md) - Entry C from remote\n",
+          "hash": "sha256:different"
+        }
+      }
+    },
+    "agent_memory": {}
+  },
+  "environmental": {"settings": {"content": {}, "hash": ""}, "keybindings": {"content": [], "hash": ""}},
+  "shared": {"skills": {}, "agents": {}, "rules": {}}
+}
+EOF
+
+  bash "$PROJECT_DIR/scripts/import.sh" "$BRAIN_REPO/consolidated/brain.json" --no-backup --quiet 2>/dev/null || true
+
+  local content
+  content=$(cat "$CLAUDE_DIR/projects/my-project/memory/MEMORY.md")
+
+  local has_a has_b has_c
+  has_a=$(echo "$content" | grep -c "Entry A" || true)
+  has_b=$(echo "$content" | grep -c "Entry B" || true)
+  has_c=$(echo "$content" | grep -c "Entry C" || true)
+
+  if [ "$has_a" -ge 1 ] && [ "$has_b" -ge 1 ] && [ "$has_c" -ge 1 ]; then
+    pass "MEMORY.md has entries from both local and remote"
+  else
+    fail "MEMORY.md missing entries (A=$has_a B=$has_b C=$has_c)"
+  fi
+}
+
+test_memory_merge_no_duplicates() {
+  section "Memory merge no duplicates"
+
+  # MEMORY.md should still have exactly 3 unique entries from previous test
+  local content
+  content=$(cat "$CLAUDE_DIR/projects/my-project/memory/MEMORY.md" 2>/dev/null || echo "")
+
+  local line_count
+  line_count=$(echo "$content" | grep -c "^\- \[" || true)
+
+  if [ "$line_count" -eq 3 ]; then
+    pass "MEMORY.md has exactly 3 entries (no duplicates)"
+  else
+    fail "MEMORY.md has $line_count entries (expected 3)"
+  fi
+}
+
+test_backward_compat_no_deletions() {
+  section "Backward compat: snapshot without deletions field"
+
+  local snap_old="$TEST_DIR/snap-compat-old.json"
+  local snap_new="$TEST_DIR/snap-compat-new.json"
+  local merged="$TEST_DIR/snap-compat-merged.json"
+
+  # Old format: no deletions field at all
+  cat > "$snap_old" <<'EOF'
+{
+  "schema_version": "1.0.0",
+  "machine": {"id": "old", "name": "old-machine"},
+  "declarative": {"claude_md": {"content": "old rules", "hash": ""}, "rules": {"old-rule.md": {"content": "rule", "hash": ""}}},
+  "procedural": {"skills": {"old-skill.md": {"content": "skill", "hash": ""}}, "agents": {}, "output_styles": {}},
+  "experiential": {"auto_memory": {}, "agent_memory": {}},
+  "environmental": {"settings": {"content": {}}, "keybindings": {"content": []}, "mcp_servers": {}},
+  "shared": {"skills": {}, "agents": {}, "rules": {}}
+}
+EOF
+
+  # New format: has deletions field (empty)
+  cat > "$snap_new" <<'EOF'
+{
+  "schema_version": "1.0.0",
+  "machine": {"id": "new", "name": "new-machine"},
+  "deletions": {},
+  "declarative": {"claude_md": {"content": "new rules", "hash": ""}, "rules": {"new-rule.md": {"content": "rule", "hash": ""}}},
+  "procedural": {"skills": {"new-skill.md": {"content": "skill", "hash": ""}}, "agents": {}, "output_styles": {}},
+  "experiential": {"auto_memory": {}, "agent_memory": {}},
+  "environmental": {"settings": {"content": {}}, "keybindings": {"content": []}, "mcp_servers": {}},
+  "shared": {"skills": {}, "agents": {}, "rules": {}}
+}
+EOF
+
+  bash "$PROJECT_DIR/scripts/merge-structured.sh" "$snap_old" "$snap_new" "$merged" 2>/dev/null || {
+    fail "Merge with old-format snapshot errored"
+    return
+  }
+
+  if [ ! -f "$merged" ]; then
+    fail "No merged output"
+    return
+  fi
+
+  # Both skills should be present (no deletions from either side)
+  local has_old has_new
+  has_old=$(jq '.procedural.skills | has("old-skill.md")' "$merged" 2>/dev/null)
+  has_new=$(jq '.procedural.skills | has("new-skill.md")' "$merged" 2>/dev/null)
+
+  if [ "$has_old" = "true" ] && [ "$has_new" = "true" ]; then
+    pass "Both old and new skills present in merge (backward compatible)"
+  else
+    fail "Missing skills in merge (old=$has_old new=$has_new)"
+  fi
+}
+
 test_deletion_tracking() {
   section "Deletion tracking in export"
 
@@ -740,6 +897,10 @@ test_wsl_detection
 test_encryption_roundtrip
 test_deletion_tracking
 test_deletion_respected_in_merge
+test_deletion_applied_on_import
+test_memory_merge_union
+test_memory_merge_no_duplicates
+test_backward_compat_no_deletions
 
 echo ""
 echo "================================"
