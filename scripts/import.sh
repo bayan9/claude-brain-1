@@ -40,8 +40,17 @@ write_if_changed() {
       return 0  # No change
     fi
   fi
+  # Preserve permissions of existing file, or default to 644 for new files
+  local saved_mode=""
+  if [ -f "$target" ]; then
+    saved_mode=$(stat -f '%Lp' "$target" 2>/dev/null || stat -c '%a' "$target" 2>/dev/null)
+  fi
   echo "$content" > "$target"
-  chmod 600 "$target"
+  if [ -n "$saved_mode" ]; then
+    chmod "$saved_mode" "$target"
+  else
+    chmod 644 "$target"
+  fi
   log_info "Updated: $target"
 }
 
