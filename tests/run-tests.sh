@@ -1045,6 +1045,49 @@ EOF
   fi
 }
 
+test_decode_project_path_hyphenated() {
+  section "decode_project_path with hyphenated paths"
+
+  source "$PROJECT_DIR/scripts/common.sh" 2>/dev/null || true
+
+  # Simple path: -Users-bayan -> /Users/bayan
+  local result
+  result=$(decode_project_path "-Users-bayan")
+  if [ "$result" = "/Users/bayan" ]; then
+    pass "Simple path decoded: -Users-bayan -> /Users/bayan"
+  else
+    fail "Simple path decode failed: got '$result' expected '/Users/bayan'"
+  fi
+
+  # Hyphenated project name: -Users-bayan-my--cool--project
+  # Double hyphens represent literal hyphens in the original path
+  result=$(decode_project_path "-Users-bayan-my--cool--project")
+  if [ "$result" = "/Users/bayan/my-cool-project" ]; then
+    pass "Hyphenated path decoded: my--cool--project -> my-cool-project"
+  else
+    fail "Hyphenated path decode failed: got '$result' expected '/Users/bayan/my-cool-project'"
+  fi
+
+  # Multiple hyphens in sequence: -home-user-my----project (4 hyphens = 2 literal hyphens)
+  result=$(decode_project_path "-home-user-my----project")
+  if [ "$result" = "/home/user/my--project" ]; then
+    pass "Multiple hyphens decoded correctly"
+  else
+    fail "Multiple hyphens decode failed: got '$result' expected '/home/user/my--project'"
+  fi
+
+  # Round-trip: encode then decode should return original
+  local original="/Users/bayan/my-cool-project"
+  local encoded
+  encoded=$(encode_project_path "$original")
+  result=$(decode_project_path "$encoded")
+  if [ "$result" = "$original" ]; then
+    pass "Round-trip encode/decode preserved: $original"
+  else
+    fail "Round-trip failed: encoded='$encoded' decoded='$result' expected='$original'"
+  fi
+}
+
 test_deletion_tracking() {
   section "Deletion tracking in export"
 
@@ -1117,6 +1160,7 @@ test_shared_namespace
 test_auto_evolve_trigger
 test_wsl_detection
 test_encryption_roundtrip
+test_decode_project_path_hyphenated
 test_deletion_tracking
 test_deletion_respected_in_merge
 test_deletion_applied_on_import

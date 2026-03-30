@@ -77,7 +77,9 @@ merge_memory_file() {
     cleaned=$(cat "$target" | grep -v '^$' | awk '!seen[$0]++')
     echo "$cleaned" > "$target"
     chmod 600 "$target"
-    log_info "Updated: $target (merged ${new_lines_count:-0} new entries)"
+    local new_lines_count
+    new_lines_count=$(echo "$new_lines" | wc -l | tr -d ' ')
+    log_info "Updated: $target (merged ${new_lines_count} new entries)"
   fi
 }
 
@@ -91,12 +93,16 @@ process_deletions() {
     return 0
   fi
 
+  # NOTE: Deletion tracking is single-snapshot diff only. If a machine is offline
+  # during the window when a deletion is recorded and subsequently cleared, it will
+  # never see that deletion. This is a known limitation — deletions are best-effort.
+
   # Process skill deletions
   echo "$deletions" | jq -r '.["procedural.skills"] // [] | .[]' 2>/dev/null | while read -r skill; do
     local target="${CLAUDE_DIR}/skills/${skill}"
     if [ -f "$target" ]; then
+      log_warn "Deleting: $target (from sync deletions)"
       rm -f "$target"
-      log_info "Deleted: $target (from sync deletions)"
     fi
   done
 
@@ -104,8 +110,8 @@ process_deletions() {
   echo "$deletions" | jq -r '.["declarative.rules"] // [] | .[]' 2>/dev/null | while read -r rule; do
     local target="${CLAUDE_DIR}/rules/${rule}"
     if [ -f "$target" ]; then
+      log_warn "Deleting: $target (from sync deletions)"
       rm -f "$target"
-      log_info "Deleted: $target (from sync deletions)"
     fi
   done
 
@@ -113,8 +119,8 @@ process_deletions() {
   echo "$deletions" | jq -r '.["procedural.agents"] // [] | .[]' 2>/dev/null | while read -r agent; do
     local target="${CLAUDE_DIR}/agents/${agent}"
     if [ -f "$target" ]; then
+      log_warn "Deleting: $target (from sync deletions)"
       rm -f "$target"
-      log_info "Deleted: $target (from sync deletions)"
     fi
   done
 }

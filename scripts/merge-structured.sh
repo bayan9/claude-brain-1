@@ -101,7 +101,12 @@ def apply_deletions($dels; $section):
 # Combine deletions from both machines
 ([$base_del, $other_del] | add // {}) as $merged_del |
 
-# Assemble merged brain (explicit construction, not $base * {...} to avoid deep merge reintroducing deleted keys)
+# Assemble merged brain with explicit field construction rather than $base * {...}.
+# Why: deep merge ($base * $overrides) would reintroduce keys that were intentionally
+# deleted via the deletions tracking mechanism. Explicit construction ensures only
+# the fields we explicitly merged above appear in the output.
+# Maintainer note: if new top-level snapshot fields are added to the schema, they
+# must be added here too — otherwise they will be silently dropped.
 {
   schema_version: $base.schema_version,
   exported_at: $base.exported_at,
