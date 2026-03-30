@@ -40,8 +40,19 @@ write_if_changed() {
       return 0  # No change
     fi
   fi
+  # Preserve permissions of existing file, or default based on extension
+  local saved_mode=""
+  if [ -f "$target" ]; then
+    saved_mode=$(stat -c '%a' "$target" 2>/dev/null || stat -f '%Lp' "$target" 2>/dev/null)
+  fi
   echo "$content" > "$target"
-  chmod 600 "$target"
+  if [ -n "$saved_mode" ]; then
+    chmod "$saved_mode" "$target"
+  elif [[ "$target" == *.sh ]]; then
+    chmod 755 "$target"
+  else
+    chmod 644 "$target"
+  fi
   log_info "Updated: $target"
 }
 
@@ -55,7 +66,7 @@ merge_memory_file() {
   mkdir -p "$(dirname "$target")"
   if [ ! -f "$target" ]; then
     echo "$new_content" > "$target"
-    chmod 600 "$target"
+    chmod 644 "$target"
     log_info "Created: $target"
     return 0
   fi
@@ -76,7 +87,7 @@ merge_memory_file() {
     local cleaned
     cleaned=$(cat "$target" | grep -v '^$' | awk '!seen[$0]++')
     echo "$cleaned" > "$target"
-    chmod 600 "$target"
+    chmod 644 "$target"
     local new_lines_count
     new_lines_count=$(echo "$new_lines" | wc -l | tr -d ' ')
     log_info "Updated: $target (merged ${new_lines_count} new entries)"
