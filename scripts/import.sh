@@ -97,31 +97,35 @@ process_deletions() {
   # during the window when a deletion is recorded and subsequently cleared, it will
   # never see that deletion. This is a known limitation — deletions are best-effort.
 
+  # Helper: safely delete a file after path traversal check
+  safe_delete() {
+    local base_dir="$1" name="$2"
+    local resolved_base resolved_target
+    resolved_base=$(python3 -c "import os; print(os.path.realpath('$base_dir'))" 2>/dev/null || realpath "$base_dir" 2>/dev/null || echo "$base_dir")
+    resolved_target=$(python3 -c "import os; print(os.path.realpath('${resolved_base}/${name}'))" 2>/dev/null || realpath "${resolved_base}/${name}" 2>/dev/null || echo "${resolved_base}/${name}")
+    if [[ "$resolved_target" != "${resolved_base}/"* ]]; then
+      log_warn "BLOCKED path traversal in deletion: ${name} (would delete outside ${base_dir})"
+      return 0
+    fi
+    if [ -f "$resolved_target" ]; then
+      log_warn "Deleting: $resolved_target (from sync deletions)"
+      rm -f "$resolved_target"
+    fi
+  }
+
   # Process skill deletions
   echo "$deletions" | jq -r '.["procedural.skills"] // [] | .[]' 2>/dev/null | while read -r skill; do
-    local target="${CLAUDE_DIR}/skills/${skill}"
-    if [ -f "$target" ]; then
-      log_warn "Deleting: $target (from sync deletions)"
-      rm -f "$target"
-    fi
+    safe_delete "${CLAUDE_DIR}/skills" "$skill"
   done
 
   # Process rule deletions
   echo "$deletions" | jq -r '.["declarative.rules"] // [] | .[]' 2>/dev/null | while read -r rule; do
-    local target="${CLAUDE_DIR}/rules/${rule}"
-    if [ -f "$target" ]; then
-      log_warn "Deleting: $target (from sync deletions)"
-      rm -f "$target"
-    fi
+    safe_delete "${CLAUDE_DIR}/rules" "$rule"
   done
 
   # Process agent deletions
   echo "$deletions" | jq -r '.["procedural.agents"] // [] | .[]' 2>/dev/null | while read -r agent; do
-    local target="${CLAUDE_DIR}/agents/${agent}"
-    if [ -f "$target" ]; then
-      log_warn "Deleting: $target (from sync deletions)"
-      rm -f "$target"
-    fi
+    safe_delete "${CLAUDE_DIR}/agents" "$agent"
   done
 }
 

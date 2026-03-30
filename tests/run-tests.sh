@@ -676,6 +676,39 @@ EOF
   fi
 }
 
+test_deletion_path_traversal_blocked() {
+  section "Deletion path traversal blocked"
+
+  # Create a file outside CLAUDE_DIR/skills that a traversal attempt would target
+  echo "# Should survive" > "$CLAUDE_DIR/important.md"
+
+  # Create consolidated brain with a path traversal attempt in deletions
+  cat > "$BRAIN_REPO/consolidated/brain.json" <<'EOF'
+{
+  "schema_version": "1.0.0",
+  "machine": {"id": "test", "name": "test"},
+  "deletions": {
+    "procedural.skills": ["../../important.md"]
+  },
+  "declarative": {"claude_md": {"content": "", "hash": ""}, "rules": {}},
+  "procedural": {"skills": {}, "agents": {}, "output_styles": {}},
+  "experiential": {"auto_memory": {}, "agent_memory": {}},
+  "environmental": {"settings": {"content": {}, "hash": ""}, "keybindings": {"content": [], "hash": ""}},
+  "shared": {"skills": {}, "agents": {}, "rules": {}}
+}
+EOF
+
+  bash "$PROJECT_DIR/scripts/import.sh" "$BRAIN_REPO/consolidated/brain.json" --no-backup --quiet 2>/dev/null || true
+
+  if [ -f "$CLAUDE_DIR/important.md" ]; then
+    pass "Path traversal deletion blocked — file survived"
+  else
+    fail "Path traversal deletion succeeded — file was deleted!"
+  fi
+
+  rm -f "$CLAUDE_DIR/important.md"
+}
+
 test_memory_merge_union() {
   section "Memory file union merge"
 
@@ -1164,6 +1197,7 @@ test_decode_project_path_hyphenated
 test_deletion_tracking
 test_deletion_respected_in_merge
 test_deletion_applied_on_import
+test_deletion_path_traversal_blocked
 test_memory_merge_union
 test_memory_merge_no_duplicates
 test_backward_compat_no_deletions
