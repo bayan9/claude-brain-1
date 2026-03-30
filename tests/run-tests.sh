@@ -560,6 +560,85 @@ test_wsl_detection() {
   fi
 }
 
+test_import_file_permissions() {
+  section "Import: file permissions"
+
+  # Create a consolidated brain with a .sh file and a .md file
+  cat > "$BRAIN_REPO/consolidated/brain.json" <<'EOF'
+{
+  "schema_version": "1.0.0",
+  "machine": {"id": "test", "name": "test"},
+  "declarative": {"claude_md": {"content": "", "hash": ""}, "rules": {"hook.sh": {"content": "#!/bin/bash\necho hi", "hash": "sha256:test1"}, "readme.md": {"content": "# Hello", "hash": "sha256:test2"}}},
+  "procedural": {"skills": {}, "agents": {}},
+  "experiential": {"auto_memory": {}},
+  "environmental": {"settings": {"content": {}, "hash": ""}, "keybindings": {"content": [], "hash": ""}}
+}
+EOF
+
+  # Import into a fresh target
+  local target="$TEST_DIR/perms-claude"
+  mkdir -p "$target"
+  local orig_claude_dir="$CLAUDE_DIR"
+  export CLAUDE_DIR="$target"
+
+  bash "$PROJECT_DIR/scripts/import.sh" "$BRAIN_REPO/consolidated/brain.json" --quiet 2>/dev/null || true
+
+  export CLAUDE_DIR="$orig_claude_dir"
+
+  # .sh files should get 755
+  if [ -f "$target/rules/hook.sh" ]; then
+    local sh_mode
+    sh_mode=$(stat -c '%a' "$target/rules/hook.sh" 2>/dev/null || stat -f '%Lp' "$target/rules/hook.sh" 2>/dev/null)
+    if [ "$sh_mode" = "755" ]; then
+      pass "New .sh file gets 755 permissions"
+    else
+      fail "New .sh file got $sh_mode instead of 755"
+    fi
+  else
+    fail "hook.sh was not imported"
+  fi
+
+  # .md files should get 644
+  if [ -f "$target/rules/readme.md" ]; then
+    local md_mode
+    md_mode=$(stat -c '%a' "$target/rules/readme.md" 2>/dev/null || stat -f '%Lp' "$target/rules/readme.md" 2>/dev/null)
+    if [ "$md_mode" = "644" ]; then
+      pass "New .md file gets 644 permissions"
+    else
+      fail "New .md file got $md_mode instead of 644"
+    fi
+  else
+    fail "readme.md was not imported"
+  fi
+
+  # Test that existing file permissions are preserved on update
+  if [ -f "$target/rules/hook.sh" ]; then
+    chmod 700 "$target/rules/hook.sh"
+    export CLAUDE_DIR="$target"
+    # Change content so write_if_changed actually writes
+    cat > "$BRAIN_REPO/consolidated/brain.json" <<'EOF'
+{
+  "schema_version": "1.0.0",
+  "machine": {"id": "test", "name": "test"},
+  "declarative": {"claude_md": {"content": "", "hash": ""}, "rules": {"hook.sh": {"content": "#!/bin/bash\necho updated", "hash": "sha256:test3"}}},
+  "procedural": {"skills": {}, "agents": {}},
+  "experiential": {"auto_memory": {}},
+  "environmental": {"settings": {"content": {}, "hash": ""}, "keybindings": {"content": [], "hash": ""}}
+}
+EOF
+    bash "$PROJECT_DIR/scripts/import.sh" "$BRAIN_REPO/consolidated/brain.json" --quiet 2>/dev/null || true
+    export CLAUDE_DIR="$orig_claude_dir"
+
+    local updated_mode
+    updated_mode=$(stat -c '%a' "$target/rules/hook.sh" 2>/dev/null || stat -f '%Lp' "$target/rules/hook.sh" 2>/dev/null)
+    if [ "$updated_mode" = "700" ]; then
+      pass "Existing file permissions preserved on update"
+    else
+      fail "Existing file permissions changed to $updated_mode (expected 700)"
+    fi
+  fi
+}
+
 test_encryption_roundtrip() {
   section "Encryption (age)"
 
@@ -624,6 +703,7 @@ test_register_machine
 test_shared_namespace
 test_auto_evolve_trigger
 test_wsl_detection
+test_import_file_permissions
 test_encryption_roundtrip
 
 echo ""

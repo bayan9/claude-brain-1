@@ -40,14 +40,18 @@ write_if_changed() {
       return 0  # No change
     fi
   fi
-  # Preserve permissions of existing file, or default to 644 for new files
+  # Preserve permissions of existing file, or default based on extension
   local saved_mode=""
   if [ -f "$target" ]; then
-    saved_mode=$(stat -f '%Lp' "$target" 2>/dev/null || stat -c '%a' "$target" 2>/dev/null)
+    # Try GNU stat first, fall back to BSD — GNU stat -f means "filesystem status"
+    # and outputs multi-line garbage, so it must not run first
+    saved_mode=$(stat -c '%a' "$target" 2>/dev/null || stat -f '%Lp' "$target" 2>/dev/null)
   fi
   echo "$content" > "$target"
   if [ -n "$saved_mode" ]; then
     chmod "$saved_mode" "$target"
+  elif [[ "$target" == *.sh ]]; then
+    chmod 755 "$target"
   else
     chmod 644 "$target"
   fi
